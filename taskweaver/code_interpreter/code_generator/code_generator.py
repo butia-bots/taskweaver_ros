@@ -20,6 +20,9 @@ from taskweaver.utils.llm_api import ChatMessageType, format_chat_message
 class CodeGeneratorConfig(ModuleConfig):
     def _configure(self) -> None:
         self._set_name("code_generator")
+        self.use_plan_enrichment = self._get_bool("use_plan_enrichment", True)
+        self.location_names = self._get_list("location_names", [])
+        self.object_names = self._get_list("object_names", [])
         self.role_name = self._get_str("role_name", "ProgramApe")
         self.executor_name = self._get_str("executor_name", "CodeExecutor")
         self.load_plugin = self._get_bool("load_plugin", True)
@@ -86,6 +89,8 @@ class CodeGenerator(Role):
             ROLE_NAME=self.role_name,
             EXECUTOR_NAME=self.executor_name,
             PLUGIN=self.plugin_spec,
+            #location_names=self.config.location_names,
+            #object_names=self.config.object_names
         )
 
         self.round_compressor = round_compressor
@@ -176,7 +181,7 @@ class CodeGenerator(Role):
                     user_query = conversation_round.user_query
                     plan = next(iter(post.get_attachment(type="plan")), None)
                     enrichment = ""
-                    if plan is not None:
+                    if plan is not None and self.config.use_plan_enrichment == True:
                         enrichment = (
                             f"To complete this request:{user_query}\n\n"
                             f"I have drawn up a plan: \n{plan}\n\n"

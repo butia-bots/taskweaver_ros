@@ -2,7 +2,39 @@ import os
 import re
 
 import setuptools
-from scripts.get_package_version import get_package_version
+from distutils.core import setup
+from catkin_pkg.python_setup import generate_distutils_setup
+
+def get_package_version():
+    import datetime
+    import json
+
+    version_file = os.path.join(os.path.dirname(__file__), "version.json")
+    with open(version_file, "r") as f:
+        version_spec = json.load(f)
+    base_version = version_spec["prod"]
+    main_suffix = version_spec["main"]
+    dev_suffix = version_spec["dev"]
+
+    version = base_version
+    return version
+    branch_name = os.environ.get("BUILD_SOURCEBRANCHNAME", None)
+    build_number = os.environ.get("BUILD_BUILDNUMBER", None)
+
+    if branch_name == "production":
+        return version
+
+    version += main_suffix if main_suffix is not None else ""
+    if branch_name == "main":
+        return version
+
+    version += dev_suffix if dev_suffix is not None else ""
+    if build_number is not None:
+        version += f"+{build_number}"
+    else:
+        version += f"+local.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    return version
 
 
 def update_version_file(version: str):
@@ -53,35 +85,14 @@ packages = [
 ]
 
 try:
-    setuptools.setup(
+    d = generate_distutils_setup(
         install_requires=required_packages,  # Dependencies
         extras_require={},
-        # Minimum Python version
-        python_requires=">=3.10",
-        name="taskweaver",  # Package name
-        version=version_str,  # Version
-        author="Microsoft Taskweaver",  # Author name
-        author_email="taskweaver@microsoft.com",  # Author mail
-        description="Python package taskweaver",  # Short package description
-        # Long package description
-        long_description=long_description,
-        long_description_content_type="text/markdown",
         # Searches throughout all dirs for files to include
         packages=packages,
         # Must be true to include files depicted in MANIFEST.in
-        # include_package_data=True,
-        license_files=["LICENSE"],  # License file
-        classifiers=[
-            "Programming Language :: Python :: 3",
-            "Operating System :: OS Independent",
-        ],
-        package_data={
-            "taskweaver.planner": ["*"],  # prompt
-            "taskweaver.code_interpreter.code_generator": ["*"],  # prompt
-        },
-        entry_points={
-            "console_scripts": ["taskweaver=taskweaver.__main__:main"],
-        },
+        # include_package_data=True
     )
+    setup(**d)
 finally:
     revert_version_file()

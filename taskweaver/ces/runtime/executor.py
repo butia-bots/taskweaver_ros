@@ -2,7 +2,7 @@ import os
 import tempfile
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, Tuple
 
 from taskweaver.ces.common import EnvPlugin
 from taskweaver.ces.runtime.context import ExecutorPluginContext, LogErrorLevel
@@ -19,7 +19,7 @@ class PluginTestEntry:
 
 @dataclass
 class RuntimePlugin(EnvPlugin):
-    initializer: Optional[type[Plugin]] = None
+    initializer: Optional[Type[Plugin]] = None
     test_cases: List[PluginTestEntry] = field(default_factory=list)
 
     @property
@@ -216,7 +216,7 @@ class Executor:
         plugin = self.plugin_registry[plugin_name]
         return plugin.get_instance(self.ctx)
 
-    def test_plugin(self, plugin_name: str) -> tuple[bool, list[str]]:
+    def test_plugin(self, plugin_name: str) -> Tuple[bool, List[str]]:
         plugin = self.plugin_registry[plugin_name]
         return plugin.test_impl()
 

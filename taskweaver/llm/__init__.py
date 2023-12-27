@@ -8,7 +8,7 @@ from openai import AzureOpenAI, OpenAI
 from taskweaver.config.module_config import ModuleConfig
 from taskweaver.utils.llm_api import ChatMessageType, format_chat_message
 
-DEFAULT_STOP_TOKEN: List[str] = ["<EOS>"]
+DEFAULT_STOP_TOKEN: List[str] = ["<EOS>", "<|im_start|>", "<|im_end|>", "</s>", "[INST]", "\nSYSTEM: ", "\nUSER: "]
 
 # TODO: retry logic
 

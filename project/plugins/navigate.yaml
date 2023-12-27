@@ -1,0 +1,20 @@
+name: navigate
+enabled: true
+required: false
+description: >-
+  A plugin for navigating to locations in the real world.
+
+parameters:
+  - name: location_name
+    type: str
+    required: true
+    description: >-
+      Specifies the name of the location to navigate to.
+
+returns:
+  - name: success
+    type: bool
+    description: >-
+      True if the navigation was successfull, False if there is no location with the given location_name in the map.
+
+configurations:

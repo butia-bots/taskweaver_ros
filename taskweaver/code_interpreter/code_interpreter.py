@@ -14,6 +14,8 @@ from taskweaver.logging import TelemetryLogger
 from taskweaver.memory import Attachment, Memory, Post
 from taskweaver.role import Role
 
+IGNORE_CONTEXT = False
+
 
 class CodeInterpreterConfig(ModuleConfig):
     def _configure(self):

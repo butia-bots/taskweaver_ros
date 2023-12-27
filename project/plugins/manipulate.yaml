@@ -1,0 +1,16 @@
+name: manipulate
+enabled: true
+required: false
+description: >-
+  A plugin for manipulating objects in the real world.
+
+parameters:
+  - name: manipulation_command
+    type: str
+    required: true
+    description: >-
+      Specifies which manipulation action to perform on which object(s).
+
+returns: []
+
+configurations:

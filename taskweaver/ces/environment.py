@@ -5,7 +5,7 @@ import os
 import sys
 from ast import literal_eval
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, Tuple
 
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 from jupyter_client.manager import KernelManager
@@ -90,9 +90,9 @@ class KernelSpecProvider(KernelSpecManager):
 class TaskWeaverMultiKernelManager(MultiKernelManager):
     def pre_start_kernel(
         self,
-        kernel_name: str | None,
+        kernel_name: Optional[str],
         kwargs: Any,
-    ) -> tuple[KernelManager, str, str]:
+    ) -> Tuple[KernelManager, str, str]:
         env: Optional[Dict[str, str]] = kwargs.get("env")
         km, kernel_name, kernel_id = super().pre_start_kernel(kernel_name, kwargs)
         if env is not None and "CONNECTION_FILE" in env:
