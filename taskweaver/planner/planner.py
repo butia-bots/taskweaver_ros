@@ -1,3 +1,4 @@
+import json
 import os
 from json import JSONDecodeError
 from typing import List, Optional
@@ -6,13 +7,14 @@ from injector import inject
 
 from taskweaver.config.module_config import ModuleConfig
 from taskweaver.llm import LLMApi
+from taskweaver.llm.util import ChatMessageType, format_chat_message
 from taskweaver.logging import TelemetryLogger
-from taskweaver.memory import Conversation, Memory, Post, Round, RoundCompressor
+from taskweaver.memory import Attachment, Conversation, Memory, Post, Round, RoundCompressor
+from taskweaver.memory.attachment import AttachmentType
 from taskweaver.memory.plugin import PluginRegistry
 from taskweaver.misc.example import load_examples
 from taskweaver.role import PostTranslator, Role
 from taskweaver.utils import read_yaml
-from taskweaver.utils.llm_api import ChatMessageType, format_chat_message
 
 
 class PlannerConfig(ModuleConfig):
@@ -43,6 +45,16 @@ class PlannerConfig(ModuleConfig):
             ),
         )
 
+        self.skip_planning = self._get_bool("skip_planning", False)
+        with open(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "dummy_plan.json",
+            ),
+            "r",
+        ) as f:
+            self.dummy_plan = json.load(f)
+
 
 class Planner(Role):
     conversation_delimiter_message: str = "Let's start the new conversation!"
@@ -56,11 +68,15 @@ class Planner(Role):
         llm_api: LLMApi,
         plugin_registry: PluginRegistry,
         round_compressor: Optional[RoundCompressor] = None,
+        plugin_only: bool = False,
     ):
         self.config = config
         self.logger = logger
         self.llm_api = llm_api
-        self.plugin_registry = plugin_registry
+        if plugin_only:
+            self.available_plugins = [p for p in plugin_registry.get_list() if p.plugin_only is True]
+        else:
+            self.available_plugins = plugin_registry.get_list()
 
         self.planner_post_translator = PostTranslator(logger)
 
@@ -68,12 +84,12 @@ class Planner(Role):
 
         if self.config.use_example:
             self.examples = self.get_examples()
-        if len(self.plugin_registry.get_list()) == 0:
+        if len(self.available_plugins) == 0:
             self.logger.warning("No plugin is loaded for Planner.")
             self.plugin_description = "No plugin functions loaded."
         else:
             self.plugin_description = "\t" + "\n\t".join(
-                [f"- {plugin.name}: " + f"{plugin.spec.description}" for plugin in self.plugin_registry.get_list()],
+                [f"- {plugin.name}: " + f"{plugin.spec.description}" for plugin in self.available_plugins],
             )
         self.instruction_template = self.prompt_data["instruction_template"]
         self.code_interpreter_introduction = self.prompt_data["code_interpreter_introduction"].format(
@@ -101,20 +117,15 @@ class Planner(Role):
         conversation: List[ChatMessageType] = []
 
         for rnd_idx, chat_round in enumerate(conv_rounds):
+            conv_init_message = None
             if rnd_idx == 0:
                 conv_init_message = Planner.conversation_delimiter_message
                 if summary is not None:
                     self.logger.debug(f"Summary: {summary}")
-                    user_message = (
+                    summary_message = (
                         f"\nThe context summary of the Planner's previous rounds" f" can refer to:\n{summary}\n\n"
                     )
-                    conv_init_message += "\n" + user_message
-                conversation.append(
-                    format_chat_message(
-                        role="user",
-                        message=conv_init_message,
-                    ),
-                )
+                    conv_init_message += "\n" + summary_message
 
             for post in chat_round.post_list:
                 if post.send_from == "Planner":
@@ -128,24 +139,30 @@ class Planner(Role):
                                 message=planner_message,
                             ),
                         )
-                    elif post.send_to == "Planner":  # self correction for planner response, e.g., format error
+                    elif (
+                        post.send_to == "Planner"
+                    ):  # self correction for planner response, e.g., format error/field check error
                         conversation.append(
                             format_chat_message(
-                                role="user",
-                                message=post.message,
+                                role="assistant",
+                                message=post.get_attachment(type=AttachmentType.invalid_response)[0],
                             ),
-                        )
-                        message = self.planner_post_translator.post_to_raw_text(
-                            post=post,
-                        )
+                        )  # append the invalid response to chat history
                         conversation.append(
-                            format_chat_message(role="assistant", message=message),
-                        )
+                            format_chat_message(role="user", message="User: " + post.message),
+                        )  # append the self correction instruction message to chat history
+
                 else:
-                    message = post.send_from + ": " + post.message
-                    conversation.append(
-                        format_chat_message(role="user", message=message),
-                    )
+                    if conv_init_message is not None:
+                        message = post.send_from + ": " + conv_init_message + "\n" + post.message
+                        conversation.append(
+                            format_chat_message(role="user", message=message),
+                        )
+                        conv_init_message = None
+                    else:
+                        conversation.append(
+                            format_chat_message(role="user", message=post.send_from + ": " + post.message),
+                        )
 
         return conversation
 
@@ -187,13 +204,20 @@ class Planner(Role):
         chat_history = self.compose_prompt(rounds)
 
         def check_post_validity(post: Post):
-            assert post.send_to is not None, "Post send_to field is None"
-            assert post.message is not None, "Post message field is None"
-            assert post.attachment_list[0].type == "init_plan", "Post attachment type is not init_plan"
-            assert post.attachment_list[1].type == "plan", "Post attachment type is not plan"
-            assert post.attachment_list[2].type == "current_plan_step", "Post attachment type is not current_plan_step"
+            assert post.send_to is not None, "send_to field is None"
+            assert post.send_to != "Planner", "send_to field should not be Planner"
+            assert post.message is not None, "message field is None"
+            assert post.attachment_list[0].type == AttachmentType.init_plan, "attachment type is not init_plan"
+            assert post.attachment_list[1].type == AttachmentType.plan, "attachment type is not plan"
+            assert (
+                post.attachment_list[2].type == AttachmentType.current_plan_step
+            ), "attachment type is not current_plan_step"
 
-        llm_output = self.llm_api.chat_completion(chat_history, use_backup_engine=use_back_up_engine)["content"]
+        if self.config.skip_planning and rounds[-1].post_list[-1].send_from == "User":
+            self.config.dummy_plan["response"][0]["content"] += rounds[-1].post_list[-1].message
+            llm_output = json.dumps(self.config.dummy_plan)
+        else:
+            llm_output = self.llm_api.chat_completion(chat_history, use_backup_engine=use_back_up_engine)["content"]
         try:
             response_post = self.planner_post_translator.raw_text_to_post(
                 llm_output=llm_output,
@@ -206,12 +230,13 @@ class Planner(Role):
         except (JSONDecodeError, AssertionError) as e:
             self.logger.error(f"Failed to parse LLM output due to {str(e)}")
             response_post = Post.create(
-                message=f"The output of Planner is invalid."
+                message=f"Failed to parse Planner output due to {str(e)}."
                 f"The output format should follow the below format:"
                 f"{self.prompt_data['planner_response_schema']}"
-                "Please try to regenerate the Planner output.",
+                "Please try to regenerate the output.",
                 send_to="Planner",
                 send_from="Planner",
+                attachment_list=[Attachment.create(type=AttachmentType.invalid_response, content=llm_output)],
             )
             self.ask_self_cnt += 1
             if self.ask_self_cnt > self.max_self_ask_num:  # if ask self too many times, return error message

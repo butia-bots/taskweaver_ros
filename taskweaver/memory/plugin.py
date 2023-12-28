@@ -114,6 +114,7 @@ class PluginSpec:
 @dataclass
 class PluginEntry:
     name: str
+    plugin_only: bool
     impl: str
     spec: PluginSpec
     config: Dict[str, Any]
@@ -121,8 +122,12 @@ class PluginEntry:
     enabled: bool = True
 
     @staticmethod
-    def from_yaml(path: str):
+    def from_yaml_file(path: str) -> Optional["PluginEntry"]:
         content = read_yaml(path)
+        return PluginEntry.from_yaml_content(content)
+
+    @staticmethod
+    def from_yaml_content(content: Dict) -> Optional["PluginEntry"]:
         do_validate = False
         valid_state = False
         if do_validate:
@@ -136,11 +141,54 @@ class PluginEntry:
                 config=content.get("configurations", {}),
                 required=content.get("required", False),
                 enabled=content.get("enabled", True),
+                plugin_only=content.get("plugin_only", False),
             )
         return None
 
     def format_prompt(self) -> str:
         return self.spec.format_prompt()
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "impl": self.impl,
+            "spec": self.spec,
+            "config": self.config,
+            "required": self.required,
+            "enabled": self.enabled,
+        }
+
+    def format_function_calling(self) -> Dict:
+        assert self.plugin_only is True, "Only `plugin_only` plugins can be called in this way."
+
+        def map_type(t: str) -> str:
+            if t.lower() == "string" or t.lower() == "str" or t.lower() == "text":
+                return "string"
+            if t.lower() == "integer" or t.lower() == "int":
+                return "integer"
+            if t.lower() == "float" or t.lower() == "double" or t.lower() == "number":
+                return "number"
+            if t.lower() == "boolean" or t.lower() == "bool":
+                return "boolean"
+            if t.lower() == "null" or t.lower() == "none":
+                return "null"
+            raise Exception(f"unknown type {t}")
+
+        function = {"type": "function", "function": {}}
+        required_params = []
+        function["function"]["name"] = self.name
+        function["function"]["description"] = self.spec.description
+        function["function"]["parameters"] = {"type": "object", "properties": {}}
+        for arg in self.spec.args:
+            function["function"]["parameters"]["properties"][arg.name] = {
+                "type": map_type(arg.type),
+                "description": arg.description,
+            }
+            if arg.required:
+                required_params.append(arg.name)
+        function["function"]["parameters"]["required"] = required_params
+
+        return function
 
 
 class PluginRegistry(ComponentRegistry[PluginEntry]):
@@ -152,7 +200,7 @@ class PluginRegistry(ComponentRegistry[PluginEntry]):
         super().__init__(file_glob, ttl)
 
     def _load_component(self, path: str) -> Tuple[str, PluginEntry]:
-        entry: Optional[PluginEntry] = PluginEntry.from_yaml(path)
+        entry: Optional[PluginEntry] = PluginEntry.from_yaml_file(path)
         if entry is None:
             raise Exception(f"failed to loading plugin from {path}")
         if not entry.enabled:

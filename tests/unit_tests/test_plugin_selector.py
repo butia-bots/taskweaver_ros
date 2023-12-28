@@ -1,19 +1,23 @@
 import os
 
+import pytest
 from injector import Injector
 
 from taskweaver.code_interpreter.code_generator.plugin_selection import PluginSelector
 from taskweaver.config.config_mgt import AppConfigSource
 from taskweaver.memory.plugin import PluginModule
 
+IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in Github Actions.")
 def test_plugin_selector():
     app_injector = Injector([PluginModule])
     app_config = AppConfigSource(
         config={
             "plugin.base_path": os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/plugins"),
-            "embedding_model.embedding_model_type": "sentence_transformer",
-            "embedding_model.embedding_model": "all-mpnet-base-v2",
+            "llm.embedding_api_type": "sentence_transformer",
+            "llm.embedding_model": "all-mpnet-base-v2",
             "llm.api_key": "test_key",
             "code_generator.enable_auto_plugin_selection": True,
         },

@@ -4,12 +4,12 @@ from typing import Dict
 
 from injector import Injector, inject
 
-from taskweaver.code_interpreter import CodeInterpreter
+from taskweaver.code_interpreter import CodeInterpreter, CodeInterpreterPluginOnly
 from taskweaver.code_interpreter.code_executor import CodeExecutor
 from taskweaver.config.module_config import ModuleConfig
 from taskweaver.logging import TelemetryLogger
 from taskweaver.memory import Memory, Post, Round
-from taskweaver.planner.planner import Planner, PlannerConfig
+from taskweaver.planner.planner import Planner
 from taskweaver.workspace.workspace import Workspace
 
 
@@ -17,8 +17,9 @@ class AppSessionConfig(ModuleConfig):
     def _configure(self) -> None:
         self._set_name("session")
 
-        self.use_planner = self._get_bool("use_planner", True)
+        self.code_interpreter_only = self._get_bool("code_interpreter_only", False)
         self.max_internal_chat_round_num = self._get_int("max_internal_chat_round_num", 10)
+        self.plugin_only_mode = self._get_bool("plugin_only_mode", False)
 
 
 class Session:
@@ -47,10 +48,12 @@ class Session:
 
         self.session_var: Dict[str, str] = {}
 
-        # self.plugins = get_plugin_registry()
-
-        self.planner_config = self.session_injector.get(PlannerConfig)
-        self.planner = self.session_injector.get(Planner)
+        self.planner = self.session_injector.create_object(
+            Planner,
+            {
+                "plugin_only": self.config.plugin_only_mode,
+            },
+        )
         self.code_executor = self.session_injector.create_object(
             CodeExecutor,
             {
@@ -60,7 +63,10 @@ class Session:
             },
         )
         self.session_injector.binder.bind(CodeExecutor, self.code_executor)
-        self.code_interpreter = self.session_injector.get(CodeInterpreter)
+        if self.config.plugin_only_mode:
+            self.code_interpreter = self.session_injector.get(CodeInterpreterPluginOnly)
+        else:
+            self.code_interpreter = self.session_injector.get(CodeInterpreter)
 
         self.max_internal_chat_round_num = self.config.max_internal_chat_round_num
         self.internal_chat_num = 0
@@ -84,7 +90,8 @@ class Session:
     def update_session_var(self, variables: Dict[str, str]):
         self.session_var.update(variables)
 
-    def send_message(self, message: str, event_handler: callable) -> Round:
+    def send_message(self, message: str, event_handler: callable = None) -> Round:
+        event_handler = event_handler or (lambda *args: None)
         chat_round = self.memory.create_round(user_query=message)
 
         def _send_message(recipient: str, post: Post):
@@ -119,23 +126,22 @@ class Session:
             return reply_post
 
         try:
-            if self.config.use_planner:
+            if not self.config.code_interpreter_only:
                 post = Post.create(message=message, send_from="User", send_to="Planner")
                 while True:
                     post = _send_message(post.send_to, post)
                     self.logger.info(
                         f"{post.send_from} talk to {post.send_to}: {post.message}",
                     )
-                    if post.send_to != post.send_from:  # ignore self talking in internal chat count
-                        self.internal_chat_num += 1
-                    if self.internal_chat_num >= self.max_internal_chat_round_num:
-                        raise Exception(
-                            f"Internal chat round number exceeds the limit of {self.max_internal_chat_round_num}",
-                        )
+                    self.internal_chat_num += 1
                     if post.send_to == "User":
                         chat_round.add_post(post)
                         self.internal_chat_num = 0
                         break
+                    if self.internal_chat_num >= self.max_internal_chat_round_num:
+                        raise Exception(
+                            f"Internal chat round number exceeds the limit of {self.max_internal_chat_round_num}",
+                        )
             else:
                 post = Post.create(
                     message=message,
@@ -156,11 +162,9 @@ class Session:
             chat_round.change_round_state("failed")
             err_message = f"Cannot process your request due to Exception: {str(e)} \n {stack_trace_str}"
             event_handler("error", err_message)
-            self.code_interpreter.rollback(chat_round)
-            self.planner.rollback(chat_round)
-            self.internal_chat_num = 0
 
         finally:
+            self.internal_chat_num = 0
             self.logger.dump_log_file(
                 chat_round,
                 file_path=os.path.join(
