@@ -20,6 +20,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 @register_plugin
 class Manipulate(Plugin):
     def __init__(self, name, ctx, config):
+        rospy.init_node("taskweaver_manipulate", anonymous=True)
         super().__init__(name=name, ctx=ctx, config=config)
         self.model = OctoModel.load_pretrained(self.config.get("octo_model", "hf://rail-berkeley/octo-small"))
         self.recognitions_subscriber = rospy.Subscriber(self.config.get("recognitions3d_topic", "/butia_vision/br/object_recognition3d"), Recognitions3D, callback=self._update_recognitions)

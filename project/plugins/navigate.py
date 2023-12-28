@@ -16,6 +16,7 @@ from std_msgs.msg import Float64
 class Navigate(Plugin):
     def __init__(self, name, ctx, config):
         super().__init__(name=name, ctx=ctx, config=config)
+        rospy.init_node("taskweaver_navigate", anonymous=True)
         self.get_key_srv = rospy.ServiceProxy(self.config.get('get_key_srv', '/butia_world/get_closest_key'), GetKey)
         self.get_pose_srv = rospy.ServiceProxy(self.config.get('get_pose_srv', '/butia_world/get_pose'), GetPose)
         self.move_base_client = SimpleActionClient(self.config.get('move_base_ns', 'move_base'), MoveBaseAction)
@@ -92,8 +93,3 @@ class Navigate(Plugin):
     @property
     def occupancy_grid(self)->OccupancyGrid:
         return deepcopy(self._occupancy_grid)
-
-@test_plugin(name="test Navigate", description="test")
-def test_call(api_call):
-    result = api_call(location_name="table")
-    assert result

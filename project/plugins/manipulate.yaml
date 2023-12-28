@@ -1,5 +1,5 @@
 name: manipulate
-enabled: true
+enabled: false
 required: false
 description: >-
   A plugin for manipulating objects in the real world.

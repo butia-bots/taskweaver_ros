@@ -284,7 +284,7 @@ class LLMApi(object):
                 top_p=top_p,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
-                stop=stop,
+                #stop=stop,
                 stream=stream,
                 seed=123456,
                 response_format={"type": self.config.response_format} if self.config.response_format else None,
