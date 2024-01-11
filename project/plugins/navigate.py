@@ -1,5 +1,5 @@
 from operator import itemgetter
-from butia_world_msgs.srv import GetKey, GetPose
+from butia_world_msgs.srv import GetKey, GetPose, GetPoseResponse
 from actionlib.simple_action_client import SimpleActionClient
 import rospy
 from typing import Dict
@@ -11,6 +11,10 @@ from ros_numpy import numpify
 import cv2
 import numpy as np
 from std_msgs.msg import Float64
+import random
+from tf.transformations import quaternion_from_euler, euler_from_quaternion
+from moveit_commander import MoveGroupCommander
+import tf
 
 @register_plugin
 class Navigate(Plugin):
@@ -23,72 +27,71 @@ class Navigate(Plugin):
         self.neck_pan_publisher = rospy.Publisher(self.config.get("neck_pan_topic", "/doris_head/head_pan_position_controller/command"), Float64)
         self.neck_tilt_publisher = rospy.Publisher(self.config.get("neck_tilt_topic", "/doris_head/head_tilt_position_controller/command"), Float64)
         self._occupancy_grid: OccupancyGrid = None
+        self.map_subscriber = rospy.Subscriber(self.config.get("map_topic", "/map"), OccupancyGrid, self._update_occupancy_grid)
+        self.arm = MoveGroupCommander("arm", ns="/doris_arm")
+        self.tfl = tf.TransformListener()
 
     def __call__(
         self,
         location_name: str
     ):
-        self.neck_pan_publisher.publish(self.config.get("pan_angle", 0.0))
-        self.neck_tilt_publisher.publish(self.config.get("tilt_angle", -np.pi/4))
-        if not self._explore_until_find(location_name=location_name):
-            return False
+        self.arm.set_named_target("Home")
+        self.arm.go(wait=True)
+        rate = rospy.Rate(50)
+        start = rospy.Time.now()
+        while rospy.Time.now() - start < rospy.Duration(5):
+            self.neck_pan_publisher.publish(self.config.get("pan_angle", 0.0))
+            self.neck_tilt_publisher.publish(self.config.get("tilt_angle", 0.0))
+            rate.sleep()
+        rate = rospy.Rate(1.0)
+        rate.sleep()
         response = self.get_key_srv.call(query=location_name, threshold=self.config.get('multimodal_similarity_threshold', 0.8))
         if response.success == False:
             return False
         else:
-            response = self.get_pose_srv.call(key=response.key)
+            response: GetPoseResponse = self.get_pose_srv.call(key=response.key+"/pose")
             pose = response.pose
+            size = response.size
+            quat = [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ]
+            roll, pitch, yaw = euler_from_quaternion(quat)
+            offset = 1.0
+            poses = []
+            for i in range(4):
+                pose_side = deepcopy(pose)
+                pose_side.position.x += np.cos((yaw + i*np.pi/2))*(size.x+offset)
+                pose_side.position.y += np.sin((yaw + i*np.pi/2))*(size.y+offset)
+                pose_side.position.z = 0.0
+                quat = quaternion_from_euler(0.0, 0.0, (yaw + (i+2)*np.pi/2))
+                pose.orientation.x = quat[0]
+                pose.orientation.y = quat[1]
+                pose.orientation.z = quat[2]
+                pose.orientation.w = quat[3]
+                poses.append(pose)
+            self.tfl.waitForTransform("base_footprint", "map", rospy.Time(), rospy.Duration(1.0))
+            try:
+                position, orientation = self.tfl.lookupTransform("map", "base_footprint", rospy.Time.now())
+            except:
+                position = None
+            if position is not None:
+                poses = sorted(poses, key=lambda p: self._euclidean_distance((p.position.x, p.position.y, p.position.z), position))
             nav_goal = MoveBaseActionGoal()
             nav_goal.header.frame_id = self.config.get("map_frame", "map")
             nav_goal.goal.target_pose.header.frame_id = self.config.get("map_frame", "map")
-            nav_goal.goal.target_pose.pose = pose
-            self.move_base_client.send_goal_and_wait(nav_goal)
+            nav_goal.goal.target_pose.pose.position = poses[0].position
+            nav_goal.goal.target_pose.pose.orientation = poses[0].orientation
+            self.move_base_client.send_goal_and_wait(nav_goal.goal)
             return True
-
-    def _explore_until_find(self, location_name: str):
-        frontier_centers = []
-        last_frontier = None
-        while not self.get_key_srv.call(query=location_name, threshold=self.config.get('multimodal_similarity_threshold', 0.8)).success:
-            occupancy_grid_msg: OccupancyGrid = self.occupancy_grid
-            occupancy_grid = numpify(occupancy_grid_msg)
-            occupied = occupancy_grid > 0
-            free = occupancy_grid == 0
-            free_edges = cv2.Canny(free*255, 100, 200)
-            shape = cv2.MORPH_RECT
-            element = cv2.getStructuringElement(shape, (5,5), (2,2))
-            occupied_expanded = cv2.dilate(occupied*255, element)
-            frontiers = (free_edges > 0) and not (occupied_expanded > 0)
-            frontiers_expanded = cv2.dilate(frontiers*255, element)
-            _, frontiers, _ = cv2.findContours(frontiers_expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            for frontier in frontiers:
-                frontier_center = np.mean(frontier, axis=1)
-                x = occupancy_grid_msg.info.origin.position.x + frontier_center[0]*occupancy_grid_msg.info.resolution
-                y = occupancy_grid_msg.info.origin.position.y + frontier_center[1]*occupancy_grid_msg.info.resolution
-                lower_x = self.config.get('lower_x', -2.0)
-                upper_x = self.config.get('upper_x', 2.0)
-                lower_y = self.config.get('lower_y', -2.0)
-                upper_y = self.config.get('upper_y', 2.0)
-                if lower_x < x and x < upper_x and lower_y < y and y < upper_y:
-                    rospy.loginfo(frontier_center)
-                    frontier_centers.append(frontier_center)
-            if len(frontier_centers) > 0:
-                frontier_center = frontier_centers[0]
-                x = occupancy_grid_msg.info.origin.position.x + frontier_center[0]*occupancy_grid_msg.info.resolution
-                y = occupancy_grid_msg.info.origin.position.y + frontier_center[1]*occupancy_grid_msg.info.resolution
-                nav_goal = MoveBaseActionGoal()
-                nav_goal.header.frame_id = self.config.get("map_frame", "map")
-                nav_goal.goal.target_pose.header.frame_id = self.config.get("map_frame", "map")
-                nav_goal.goal.target_pose.pose.position.x = x
-                nav_goal.goal.target_pose.pose.position.y = y
-                self.move_base_client.send_goal_and_wait(nav_goal)
-                last_frontier = frontier_center
-                frontier_centers.pop(0)
-            else:
-                return False
-        return True
 
     def _update_occupancy_grid(self, msg: OccupancyGrid):
         self._occupancy_grid = msg
+
+    def _euclidean_distance(self, p0, p1):
+        return np.sqrt((p0[0]-p1[0])**2 + (p0[1]-p1[1])**2 + (p0[2]-p1[2])**2)
 
     @property
     def occupancy_grid(self)->OccupancyGrid:

@@ -1,0 +1,16 @@
+name: grasp
+enabled: true
+required: false
+description: >-
+  A plugin for grasping objects in the real world.
+
+parameters:
+  - name: object_name
+    type: str
+    required: true
+    description: >-
+      Specifies which object should be grasped.
+
+returns: []
+
+configurations:
